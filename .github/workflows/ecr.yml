@@ -1,4 +1,4 @@
-name: EmployeeHub ECR
+name: EmployeeHub ECR CI
 
 on:
   push:
