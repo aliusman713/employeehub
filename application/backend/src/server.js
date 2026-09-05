@@ -43,6 +43,12 @@ app.get("/api/ready", async (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.use("/api/employees", employeeRoutes);
 
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "healthy",
+    service: "employeehub-backend",
+  });
+});
 app.listen(PORT, () => {
   console.log(`EmployeeHub backend running on port ${PORT}`);
 });
