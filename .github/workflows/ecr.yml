@@ -1,4 +1,5 @@
-name: EmployeeHub ECR CI
+---
+name: EmployeeHub Build and Deploy
 
 on:
   push:
@@ -11,58 +12,313 @@ permissions:
 
 env:
   AWS_REGION: ap-south-1
+  ECR_REGISTRY: 551670267393.dkr.ecr.ap-south-1.amazonaws.com
+
   ECR_BACKEND_REPOSITORY: employeehub-backend
   ECR_FRONTEND_REPOSITORY: employeehub-frontend
 
+  ECS_CLUSTER: employeehub-dev
+  ECS_BACKEND_SERVICE: employeehub-dev-backend
+  ECS_FRONTEND_SERVICE: employeehub-dev-frontend
+
+  ECS_BACKEND_TASK_FAMILY: employeehub-dev-backend
+  ECS_FRONTEND_TASK_FAMILY: employeehub-dev-frontend
+
 jobs:
-  build-and-push:
-    name: Build and Push Images
+
+  build-and-deploy:
+    name: Build, Push and Deploy
     runs-on: ubuntu-latest
 
     steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
 
+
+      # ---------------------------------------------------------
+      # 2. Configure AWS using GitHub OIDC
+      # ---------------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::551670267393:role/EmployeeHubGitHubActionsECRRole
-          aws-region: ap-south-1
+          aws-region: ${{ env.AWS_REGION }}
 
+
+      # ---------------------------------------------------------
+      # 3. Login to ECR
+      # ---------------------------------------------------------
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set image metadata
-        id: metadata
-        run: echo "IMAGE_TAG=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-      - name: Build backend image
+      # ---------------------------------------------------------
+      # 4. Generate immutable image tag
+      # ---------------------------------------------------------
+      - name: Set image tag
+        id: metadata
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::12}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying commit: $GITHUB_SHA"
+          echo "Docker image tag: $IMAGE_TAG"
+
+
+      # ---------------------------------------------------------
+      # 5. Build backend
+      # ---------------------------------------------------------
+      - name: Build backend Docker image
         run: |
           docker build \
-            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }} \
-            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:latest \
+            -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:${{ steps.metadata.outputs.IMAGE_TAG }} \
+            -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:latest \
             ./application/backend
 
-      - name: Build frontend image
+
+      # ---------------------------------------------------------
+      # 6. Build frontend
+      # ---------------------------------------------------------
+      - name: Build frontend Docker image
         run: |
           docker build \
-            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }} \
-            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:latest \
+            -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:${{ steps.metadata.outputs.IMAGE_TAG }} \
+            -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:latest \
             ./application/frontend
 
-      - name: Push backend image
+
+      # ---------------------------------------------------------
+      # 7. Push backend images
+      # ---------------------------------------------------------
+      - name: Push backend images
         run: |
           docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }}
+            $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:${{ steps.metadata.outputs.IMAGE_TAG }}
 
           docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:latest
+            $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:latest
 
-      - name: Push frontend image
+
+      # ---------------------------------------------------------
+      # 8. Push frontend images
+      # ---------------------------------------------------------
+      - name: Push frontend images
         run: |
           docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }}
+            $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:${{ steps.metadata.outputs.IMAGE_TAG }}
 
           docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:latest
+            $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:latest
+
+
+      # ---------------------------------------------------------
+      # 9. Prepare backend task definition
+      #
+      # We retrieve the existing task definition from AWS and
+      # preserve all configuration including:
+      # - environment variables
+      # - SSM secrets
+      # - CloudWatch logging
+      # - execution role
+      # - CPU/memory
+      # - port mappings
+      #
+      # Only the container image is changed.
+      # ---------------------------------------------------------
+      - name: Prepare backend task definition
+        env:
+          IMAGE_TAG: ${{ steps.metadata.outputs.IMAGE_TAG }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:$IMAGE_TAG"
+
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_BACKEND_TASK_FAMILY" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition' \
+            --output json |
+          jq --arg image "$IMAGE" '
+            del(
+              .taskDefinitionArn,
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy
+            ) |
+            .containerDefinitions[0].image = $image
+          ' > /tmp/backend-task-definition.json
+
+      # ---------------------------------------------------------
+      # 10. Prepare frontend task definition
+      # ---------------------------------------------------------
+      - name: Prepare frontend task definition
+        env:
+          IMAGE_TAG: ${{ steps.metadata.outputs.IMAGE_TAG }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:$IMAGE_TAG"
+
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_FRONTEND_TASK_FAMILY" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition' \
+            --output json |
+          jq --arg image "$IMAGE" '
+            del(
+              .taskDefinitionArn,
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy
+            ) |
+            .containerDefinitions[0].image = $image
+          ' > /tmp/frontend-task-definition.json      # ---------------------------------------------------------
+      # 11. Register backend ECS task definition
+      # ---------------------------------------------------------
+      - name: Register backend task definition
+        id: backend-task
+        run: |
+          BACKEND_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/backend-task-definition.json \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "TASK_DEFINITION=$BACKEND_TASK_DEF" >> "$GITHUB_OUTPUT"
+
+          echo "Registered backend task definition:"
+          echo "$BACKEND_TASK_DEF"
+
+
+      # ---------------------------------------------------------
+      # 12. Register frontend ECS task definition
+      # ---------------------------------------------------------
+      - name: Register frontend task definition
+        id: frontend-task
+        run: |
+          FRONTEND_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/frontend-task-definition.json \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "TASK_DEFINITION=$FRONTEND_TASK_DEF" >> "$GITHUB_OUTPUT"
+
+          echo "Registered frontend task definition:"
+          echo "$FRONTEND_TASK_DEF"
+
+
+      # ---------------------------------------------------------
+      # 13. Deploy backend
+      # ---------------------------------------------------------
+      - name: Deploy backend to ECS
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_BACKEND_SERVICE" \
+            --task-definition "${{ steps.backend-task.outputs.TASK_DEFINITION }}" \
+            --region "$AWS_REGION"
+
+
+      # ---------------------------------------------------------
+      # 14. Deploy frontend
+      # ---------------------------------------------------------
+      - name: Deploy frontend to ECS
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_FRONTEND_SERVICE" \
+            --task-definition "${{ steps.frontend-task.outputs.TASK_DEFINITION }}" \
+            --region "$AWS_REGION"
+
+
+      # ---------------------------------------------------------
+      # 15. Wait for backend stability
+      # ---------------------------------------------------------
+      - name: Wait for backend deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_BACKEND_SERVICE" \
+            --region "$AWS_REGION"
+
+
+      # ---------------------------------------------------------
+      # 16. Wait for frontend stability
+      # ---------------------------------------------------------
+      - name: Wait for frontend deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_FRONTEND_SERVICE" \
+            --region "$AWS_REGION"
+
+
+      # ---------------------------------------------------------
+      # 17. Verify ECS deployment
+      # ---------------------------------------------------------
+      - name: Verify ECS services
+        run: |
+          echo "===== BACKEND ====="
+
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_BACKEND_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDefinition:taskDefinition}' \
+            --output table
+
+          echo
+          echo "===== FRONTEND ====="
+
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_FRONTEND_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount,TaskDefinition:taskDefinition}' \
+            --output table
+
+
+      # ---------------------------------------------------------
+      # 18. Verify deployed images
+      # ---------------------------------------------------------
+      - name: Verify deployed images
+        run: |
+          echo "===== BACKEND IMAGE ====="
+
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.backend-task.outputs.TASK_DEFINITION }}" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition.containerDefinitions[0].image' \
+            --output text
+
+          echo
+          echo "===== FRONTEND IMAGE ====="
+
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.frontend-task.outputs.TASK_DEFINITION }}" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition.containerDefinitions[0].image' \
+            --output text
+
+
+      # ---------------------------------------------------------
+      # 19. Deployment summary
+      # ---------------------------------------------------------
+      - name: Deployment summary
+        run: |
+          echo "=============================================="
+          echo " EmployeeHub Deployment Successful"
+          echo "=============================================="
+          echo "Commit:       $GITHUB_SHA"
+          echo "Image tag:    ${{ steps.metadata.outputs.IMAGE_TAG }}"
+          echo "Backend:      ECS Fargate"
+          echo "Frontend:     ECS Fargate"
+          echo "Environment:  dev"
+          echo "Region:       $AWS_REGION"
+          echo "==============================================
