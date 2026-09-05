@@ -7,111 +7,75 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadEmployees = async () => {
-    try {
-      setLoading(true);
-      setError("");
-
-      const response = await api.get("/employees");
-      setEmployees(response.data);
-    } catch (err) {
-      console.error(err);
-      setError("Unable to load employees.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadEmployees();
+    let isMounted = true;
+
+    const fetchEmployees = async () => {
+      try {
+        const response = await api.get("/employees");
+
+        if (isMounted) {
+          setEmployees(response.data);
+        }
+      } catch (err) {
+        console.error("Failed to load employees:", err);
+
+        if (isMounted) {
+          setError("Failed to load employees");
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchEmployees();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   return (
     <div className="app">
       <header className="header">
-        <div>
-          <h1>EmployeeHub</h1>
-          <p>Employee Management Portal</p>
-        </div>
-
-        <button onClick={loadEmployees}>
-          Refresh
-        </button>
+        <h1>EmployeeHub</h1>
+        <p>Employee Management Dashboard</p>
       </header>
 
       <main className="container">
-        <section className="dashboard-card">
-          <div className="card-header">
-            <div>
-              <h2>Employees</h2>
-              <p>
-                Manage employees across your organization.
-              </p>
-            </div>
+        <section className="employee-section">
+          <h2>Employees</h2>
 
-            <span className="employee-count">
-              {employees.length} Employees
-            </span>
-          </div>
+          {loading && <p>Loading employees...</p>}
 
-          {loading && (
-            <div className="message">
-              Loading employees...
-            </div>
+          {error && <p className="error">{error}</p>}
+
+          {!loading && !error && employees.length === 0 && (
+            <p>No employees found.</p>
           )}
 
-          {error && (
-            <div className="error">
-              {error}
-            </div>
-          )}
+          {!loading && !error && employees.length > 0 && (
+            <div className="employee-grid">
+              {employees.map((employee) => (
+                <div className="employee-card" key={employee.id}>
+                  <h3>{employee.name}</h3>
 
-          {!loading && !error && (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Department</th>
-                    <th>Designation</th>
-                    <th>Salary</th>
-                  </tr>
-                </thead>
+                  <p>
+                    <strong>Email:</strong> {employee.email}
+                  </p>
 
-                <tbody>
-                  {employees.map((employee) => (
-                    <tr key={employee.id}>
-                      <td>{employee.id}</td>
+                  <p>
+                    <strong>Department:</strong>{" "}
+                    {employee.department || "N/A"}
+                  </p>
 
-                      <td>
-                        <strong>
-                          {employee.first_name}{" "}
-                          {employee.last_name}
-                        </strong>
-                      </td>
-
-                      <td>{employee.email}</td>
-
-                      <td>
-                        <span className="department">
-                          {employee.department}
-                        </span>
-                      </td>
-
-                      <td>{employee.designation}</td>
-
-                      <td>
-                        ₹
-                        {Number(employee.salary).toLocaleString(
-                          "en-IN"
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                  <p>
+                    <strong>Position:</strong> {employee.position || "N/A"}
+                  </p>
+                </div>
+              ))}
             </div>
           )}
         </section>
