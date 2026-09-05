@@ -1,9 +1,68 @@
+name: EmployeeHub ECR
+
+on:
+  push:
+    branches:
+      - main
+
 permissions:
   id-token: write
   contents: read
 
-- name: Configure AWS credentials
-  uses: aws-actions/configure-aws-credentials@v4
-  with:
-    role-to-assume: arn:aws:iam::551670267393:role/EmployeeHubGitHubActionsRole
-    aws-region: ap-south-1
+env:
+  AWS_REGION: ap-south-1
+  ECR_BACKEND_REPOSITORY: employeehub-backend
+  ECR_FRONTEND_REPOSITORY: employeehub-frontend
+
+jobs:
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::551670267393:role/EmployeeHubGitHubActionsRole
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image metadata
+        id: metadata
+        run: echo "IMAGE_TAG=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }} \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:latest \
+            ./application/backend
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }} \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:latest \
+            ./application/frontend
+
+      - name: Push backend image
+        run: |
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }}
+
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:latest
+
+      - name: Push frontend image
+        run: |
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ steps.metadata.outputs.IMAGE_TAG }}
+
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:latest
