@@ -1,0 +1,9 @@
+permissions:
+  id-token: write
+  contents: read
+
+- name: Configure AWS credentials
+  uses: aws-actions/configure-aws-credentials@v4
+  with:
+    role-to-assume: arn:aws:iam::551670267393:role/EmployeeHubGitHubActionsRole
+    aws-region: ap-south-1
