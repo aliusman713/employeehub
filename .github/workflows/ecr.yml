@@ -313,7 +313,7 @@ jobs:
       - name: Deployment summary
         run: |
           echo "=============================================="
-          echo " EmployeeHub Deployment Successful"
+          echo "EmployeeHub Deployment Successful"
           echo "=============================================="
           echo "Commit:       $GITHUB_SHA"
           echo "Image tag:    ${{ steps.metadata.outputs.IMAGE_TAG }}"
@@ -321,4 +321,4 @@ jobs:
           echo "Frontend:     ECS Fargate"
           echo "Environment:  dev"
           echo "Region:       $AWS_REGION"
-          echo "==============================================
+          echo "=============================================="
