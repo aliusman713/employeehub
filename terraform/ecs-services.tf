@@ -35,7 +35,14 @@ resource "aws_ecs_service" "backend" {
   tags = {
     Name = "employeehub-${var.environment}-backend-service"
   }
+
+  lifecycle {
+    ignore_changes = [
+      task_definition
+    ]
+  }
 }
+
 resource "aws_ecs_service" "frontend" {
   name            = "employeehub-${var.environment}-frontend"
   cluster         = aws_ecs_cluster.employeehub.id
@@ -71,5 +78,11 @@ resource "aws_ecs_service" "frontend" {
 
   tags = {
     Name = "employeehub-${var.environment}-frontend-service"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      task_definition
+    ]
   }
 }
